@@ -294,6 +294,8 @@ mod tests {
 
     fn codex_event(session_id: &str) -> CodexTokenUsageEvent {
         CodexTokenUsageEvent {
+            cache_creation_30m_tokens: 0,
+            cache_creation_12h_tokens: 0,
             session_id: session_id.to_string(),
             response_id: None,
             timestamp: "2026-01-02T00:00:00.000Z".to_string(),

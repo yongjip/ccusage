@@ -261,7 +261,10 @@ pub(super) fn visit_codex_session_file_with_compaction_history(
             match replay {
                 CodexReplayState::MatchingParent { prefix, index } => {
                     let usage = event.raw_usage();
-                    if prefix.get(index) == Some(&usage) {
+                    if prefix
+                        .get(index)
+                        .is_some_and(|parent| parent.same_token_counts(&usage))
+                    {
                         replay = CodexReplayState::MatchingParent {
                             prefix,
                             index: index + 1,
@@ -446,6 +449,8 @@ fn visit_codex_session_entry(
             input_tokens: raw_usage.input_tokens,
             cached_input_tokens: raw_usage.cached_input_tokens,
             cache_creation_tokens: raw_usage.cache_creation_tokens,
+            cache_creation_30m_tokens: raw_usage.cache_creation_30m_tokens,
+            cache_creation_12h_tokens: raw_usage.cache_creation_12h_tokens,
             output_tokens: raw_usage.output_tokens,
             reasoning_output_tokens: raw_usage.reasoning_output_tokens,
             total_tokens: raw_usage.total_tokens,
@@ -513,7 +518,7 @@ fn visit_codex_session_entry(
         cumulative_advanced,
         delta,
     } = codex_token_count_usage(info, previous_totals);
-    let Some(raw_usage) = delta else {
+    let Some(mut raw_usage) = delta else {
         return Ok(());
     };
     if !has_codex_token_usage(&raw_usage) {
@@ -530,13 +535,24 @@ fn visit_codex_session_entry(
             .pending_usage
             .get(response_id)
             .is_some_and(|pending| {
-                pending.event.raw_usage() == raw_usage
+                pending.event.raw_usage().same_token_counts(&raw_usage)
                     || pending.thread_token_usage.zip(total_usage).is_some_and(
-                        |(recorded, total)| recorded == normalize_codex_raw_usage(total),
+                        |(recorded, total)| {
+                            recorded.same_token_counts(&normalize_codex_raw_usage(total))
+                        },
                     )
             })
     {
-        compaction_usage.pending_usage.remove(response_id);
+        if let Some(pending) = compaction_usage.pending_usage.remove(response_id) {
+            let recorded = pending.event.raw_usage();
+            if recorded.same_token_counts(&raw_usage)
+                && raw_usage.cache_creation_30m_tokens == 0
+                && raw_usage.cache_creation_12h_tokens == 0
+            {
+                raw_usage.cache_creation_30m_tokens = recorded.cache_creation_30m_tokens;
+                raw_usage.cache_creation_12h_tokens = recorded.cache_creation_12h_tokens;
+            }
+        }
         compaction_usage
             .emitted_response_ids
             .insert(response_id.clone());
@@ -559,6 +575,8 @@ fn visit_codex_session_entry(
         input_tokens: raw_usage.input_tokens,
         cached_input_tokens: raw_usage.cached_input_tokens,
         cache_creation_tokens: raw_usage.cache_creation_tokens,
+        cache_creation_30m_tokens: raw_usage.cache_creation_30m_tokens,
+        cache_creation_12h_tokens: raw_usage.cache_creation_12h_tokens,
         output_tokens: raw_usage.output_tokens,
         reasoning_output_tokens: raw_usage.reasoning_output_tokens,
         total_tokens: raw_usage.total_tokens,
@@ -651,6 +669,8 @@ fn visit_codex_exec_usage_event(
         input_tokens: raw_usage.input_tokens,
         cached_input_tokens: raw_usage.cached_input_tokens,
         cache_creation_tokens: raw_usage.cache_creation_tokens,
+        cache_creation_30m_tokens: raw_usage.cache_creation_30m_tokens,
+        cache_creation_12h_tokens: raw_usage.cache_creation_12h_tokens,
         output_tokens: raw_usage.output_tokens,
         reasoning_output_tokens: raw_usage.reasoning_output_tokens,
         total_tokens: raw_usage.total_tokens,
@@ -1298,25 +1318,42 @@ fn subtract_codex_raw_usage(
     current: &CodexRawUsage,
     previous: Option<&CodexRawUsage>,
 ) -> CodexRawUsage {
+    // A newly appearing cumulative breakdown also covers past writes. Without
+    // the previous split, those lifetimes cannot be assigned to this delta.
+    let previous = previous.copied().unwrap_or_default();
+    let has_complete_breakdowns = current
+        .cache_creation_30m_tokens
+        .checked_add(current.cache_creation_12h_tokens)
+        == Some(current.cache_creation_tokens)
+        && previous
+            .cache_creation_30m_tokens
+            .checked_add(previous.cache_creation_12h_tokens)
+            == Some(previous.cache_creation_tokens)
+        && current.cache_creation_30m_tokens >= previous.cache_creation_30m_tokens
+        && current.cache_creation_12h_tokens >= previous.cache_creation_12h_tokens;
     normalize_codex_raw_usage(CodexRawUsage {
-        input_tokens: current
-            .input_tokens
-            .saturating_sub(previous.map_or(0, |usage| usage.input_tokens)),
+        input_tokens: current.input_tokens.saturating_sub(previous.input_tokens),
         cached_input_tokens: current
             .cached_input_tokens
-            .saturating_sub(previous.map_or(0, |usage| usage.cached_input_tokens)),
+            .saturating_sub(previous.cached_input_tokens),
         cache_creation_tokens: current
             .cache_creation_tokens
-            .saturating_sub(previous.map_or(0, |usage| usage.cache_creation_tokens)),
-        output_tokens: current
-            .output_tokens
-            .saturating_sub(previous.map_or(0, |usage| usage.output_tokens)),
+            .saturating_sub(previous.cache_creation_tokens),
+        cache_creation_30m_tokens: if has_complete_breakdowns {
+            current.cache_creation_30m_tokens - previous.cache_creation_30m_tokens
+        } else {
+            0
+        },
+        cache_creation_12h_tokens: if has_complete_breakdowns {
+            current.cache_creation_12h_tokens - previous.cache_creation_12h_tokens
+        } else {
+            0
+        },
+        output_tokens: current.output_tokens.saturating_sub(previous.output_tokens),
         reasoning_output_tokens: current
             .reasoning_output_tokens
-            .saturating_sub(previous.map_or(0, |usage| usage.reasoning_output_tokens)),
-        total_tokens: current
-            .total_tokens
-            .saturating_sub(previous.map_or(0, |usage| usage.total_tokens)),
+            .saturating_sub(previous.reasoning_output_tokens),
+        total_tokens: current.total_tokens.saturating_sub(previous.total_tokens),
     })
 }
 
@@ -1325,9 +1362,11 @@ fn codex_token_count_usage(
     previous_totals: &mut Option<CodexRawUsage>,
 ) -> CodexTokenCountUsage {
     let total_usage = info.and_then(|info| info.total_token_usage.as_ref().copied());
-    let cumulative_advanced = total_usage
-        .as_ref()
-        .is_none_or(|total_usage| previous_totals.as_ref() != Some(total_usage));
+    let cumulative_advanced = total_usage.as_ref().is_none_or(|total_usage| {
+        previous_totals
+            .as_ref()
+            .is_none_or(|previous| !previous.same_token_counts(total_usage))
+    });
     let raw_usage = info
         .and_then(|info| info.last_token_usage.as_ref().copied())
         .filter(|_| cumulative_advanced)
@@ -1359,6 +1398,14 @@ fn normalize_codex_raw_usage(mut usage: CodexRawUsage) -> CodexRawUsage {
     usage.cache_creation_tokens = usage
         .cache_creation_tokens
         .min(usage.input_tokens.saturating_sub(usage.cached_input_tokens));
+    if usage
+        .cache_creation_30m_tokens
+        .checked_add(usage.cache_creation_12h_tokens)
+        != Some(usage.cache_creation_tokens)
+    {
+        usage.cache_creation_30m_tokens = 0;
+        usage.cache_creation_12h_tokens = 0;
+    }
     usage
 }
 

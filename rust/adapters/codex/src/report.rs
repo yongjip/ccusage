@@ -279,10 +279,14 @@ fn model_usage_bucket(usage: &CodexModelUsage) -> CodexUsageBucket {
         input_tokens: usage.input_tokens,
         cached_input_tokens: usage.cached_input_tokens,
         cache_creation_tokens: usage.cache_creation_tokens,
+        cache_creation_30m_tokens: usage.cache_creation_30m_tokens,
+        cache_creation_12h_tokens: usage.cache_creation_12h_tokens,
         output_tokens: usage.output_tokens,
         long_context_input_tokens: usage.long_context_input_tokens,
         long_context_cached_input_tokens: usage.long_context_cached_input_tokens,
         long_context_cache_creation_tokens: usage.long_context_cache_creation_tokens,
+        long_context_cache_creation_30m_tokens: usage.long_context_cache_creation_30m_tokens,
+        long_context_cache_creation_12h_tokens: usage.long_context_cache_creation_12h_tokens,
         long_context_output_tokens: usage.long_context_output_tokens,
     }
 }
@@ -299,6 +303,12 @@ fn subtract_codex_usage_bucket(
         cache_creation_tokens: total
             .cache_creation_tokens
             .saturating_sub(excluded.cache_creation_tokens),
+        cache_creation_30m_tokens: total
+            .cache_creation_30m_tokens
+            .saturating_sub(excluded.cache_creation_30m_tokens),
+        cache_creation_12h_tokens: total
+            .cache_creation_12h_tokens
+            .saturating_sub(excluded.cache_creation_12h_tokens),
         output_tokens: total.output_tokens.saturating_sub(excluded.output_tokens),
         long_context_input_tokens: total
             .long_context_input_tokens
@@ -309,6 +319,12 @@ fn subtract_codex_usage_bucket(
         long_context_cache_creation_tokens: total
             .long_context_cache_creation_tokens
             .saturating_sub(excluded.long_context_cache_creation_tokens),
+        long_context_cache_creation_30m_tokens: total
+            .long_context_cache_creation_30m_tokens
+            .saturating_sub(excluded.long_context_cache_creation_30m_tokens),
+        long_context_cache_creation_12h_tokens: total
+            .long_context_cache_creation_12h_tokens
+            .saturating_sub(excluded.long_context_cache_creation_12h_tokens),
         long_context_output_tokens: total
             .long_context_output_tokens
             .saturating_sub(excluded.long_context_output_tokens),
@@ -324,6 +340,12 @@ fn add_codex_usage_buckets(left: CodexUsageBucket, right: CodexUsageBucket) -> C
         cache_creation_tokens: left
             .cache_creation_tokens
             .saturating_add(right.cache_creation_tokens),
+        cache_creation_30m_tokens: left
+            .cache_creation_30m_tokens
+            .saturating_add(right.cache_creation_30m_tokens),
+        cache_creation_12h_tokens: left
+            .cache_creation_12h_tokens
+            .saturating_add(right.cache_creation_12h_tokens),
         output_tokens: left.output_tokens.saturating_add(right.output_tokens),
         long_context_input_tokens: left
             .long_context_input_tokens
@@ -334,6 +356,12 @@ fn add_codex_usage_buckets(left: CodexUsageBucket, right: CodexUsageBucket) -> C
         long_context_cache_creation_tokens: left
             .long_context_cache_creation_tokens
             .saturating_add(right.long_context_cache_creation_tokens),
+        long_context_cache_creation_30m_tokens: left
+            .long_context_cache_creation_30m_tokens
+            .saturating_add(right.long_context_cache_creation_30m_tokens),
+        long_context_cache_creation_12h_tokens: left
+            .long_context_cache_creation_12h_tokens
+            .saturating_add(right.long_context_cache_creation_12h_tokens),
         long_context_output_tokens: left
             .long_context_output_tokens
             .saturating_add(right.long_context_output_tokens),
@@ -383,12 +411,44 @@ fn calculate_codex_bucket_cost(usage: &CodexUsageBucket, pricing: &crate::Pricin
         long_input.saturating_sub(long_cached.saturating_add(long_cache_creation));
     short_non_cached as f64 * pricing.input
         + short_cached as f64 * cache_read
-        + short_cache_creation as f64 * cache_creation
+        + cache_creation_cost_by_ttl(
+            short_cache_creation,
+            usage
+                .cache_creation_30m_tokens
+                .saturating_sub(usage.long_context_cache_creation_30m_tokens),
+            usage
+                .cache_creation_12h_tokens
+                .saturating_sub(usage.long_context_cache_creation_12h_tokens),
+            pricing.input,
+            cache_creation,
+        )
         + (usage.output_tokens - long_output) as f64 * pricing.output
         + long_non_cached as f64 * long_input_rate
         + long_cached as f64 * long_cache_read
-        + long_cache_creation as f64 * long_cache_creation_rate
+        + cache_creation_cost_by_ttl(
+            long_cache_creation,
+            usage.long_context_cache_creation_30m_tokens,
+            usage.long_context_cache_creation_12h_tokens,
+            long_input_rate,
+            long_cache_creation_rate,
+        )
         + long_output as f64 * long_output_rate
+}
+
+fn cache_creation_cost_by_ttl(
+    total: u64,
+    ttl_30m: u64,
+    ttl_12h: u64,
+    input_rate: f64,
+    unclassified_rate: f64,
+) -> f64 {
+    let ttl_30m = ttl_30m.min(total);
+    let ttl_12h = ttl_12h.min(total - ttl_30m);
+    // These are total write rates, not premiums added to ordinary input.
+    // Missing lifetime information keeps the existing catalog/override rate.
+    ttl_30m as f64 * input_rate * 1.25
+        + ttl_12h as f64 * input_rate * 2.5
+        + (total - ttl_30m - ttl_12h) as f64 * unclassified_rate
 }
 
 pub fn calculate_group_cost<S>(group: &CodexGroup, pricing: &PricingMap, speed: S) -> f64

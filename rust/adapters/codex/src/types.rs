@@ -7,9 +7,22 @@ pub struct CodexRawUsage {
     pub(crate) input_tokens: u64,
     pub(crate) cached_input_tokens: u64,
     pub(crate) cache_creation_tokens: u64,
+    pub(crate) cache_creation_30m_tokens: u64,
+    pub(crate) cache_creation_12h_tokens: u64,
     pub(crate) output_tokens: u64,
     pub(crate) reasoning_output_tokens: u64,
     pub(crate) total_tokens: u64,
+}
+
+impl CodexRawUsage {
+    pub(crate) fn same_token_counts(&self, other: &Self) -> bool {
+        self.input_tokens == other.input_tokens
+            && self.cached_input_tokens == other.cached_input_tokens
+            && self.cache_creation_tokens == other.cache_creation_tokens
+            && self.output_tokens == other.output_tokens
+            && self.reasoning_output_tokens == other.reasoning_output_tokens
+            && self.total_tokens == other.total_tokens
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +62,9 @@ pub struct CodexTokenUsageEvent {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
     pub cache_creation_tokens: u64,
+    /// Known subsets of cache creation; unclassified writes retain the catalog rate.
+    pub cache_creation_30m_tokens: u64,
+    pub cache_creation_12h_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_output_tokens: u64,
     pub total_tokens: u64,
@@ -62,6 +78,8 @@ impl CodexTokenUsageEvent {
             input_tokens: self.input_tokens,
             cached_input_tokens: self.cached_input_tokens,
             cache_creation_tokens: self.cache_creation_tokens,
+            cache_creation_30m_tokens: self.cache_creation_30m_tokens,
+            cache_creation_12h_tokens: self.cache_creation_12h_tokens,
             output_tokens: self.output_tokens,
             reasoning_output_tokens: self.reasoning_output_tokens,
             total_tokens: self.total_tokens,
@@ -74,10 +92,14 @@ pub struct CodexUsageBucket {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
     pub cache_creation_tokens: u64,
+    pub cache_creation_30m_tokens: u64,
+    pub cache_creation_12h_tokens: u64,
     pub output_tokens: u64,
     pub long_context_input_tokens: u64,
     pub long_context_cached_input_tokens: u64,
     pub long_context_cache_creation_tokens: u64,
+    pub long_context_cache_creation_30m_tokens: u64,
+    pub long_context_cache_creation_12h_tokens: u64,
     pub long_context_output_tokens: u64,
 }
 
@@ -94,6 +116,8 @@ pub struct CodexModelUsage {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
     pub cache_creation_tokens: u64,
+    pub cache_creation_30m_tokens: u64,
+    pub cache_creation_12h_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_output_tokens: u64,
     pub total_tokens: u64,
@@ -105,6 +129,8 @@ pub struct CodexModelUsage {
     pub long_context_input_tokens: u64,
     pub long_context_cached_input_tokens: u64,
     pub long_context_cache_creation_tokens: u64,
+    pub long_context_cache_creation_30m_tokens: u64,
+    pub long_context_cache_creation_12h_tokens: u64,
     pub long_context_output_tokens: u64,
     pub recorded_standard_usage: CodexUsageBucket,
     pub recorded_fast_usage: CodexUsageBucket,
@@ -293,6 +319,8 @@ struct CodexRawUsageFields {
     cache_write_input_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     cached_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
+    input_tokens_details: Option<CodexInputTokensDetails>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     output_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
@@ -305,6 +333,41 @@ struct CodexRawUsageFields {
     reasoning_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     total_tokens: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+struct CodexInputTokensDetails {
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    cached_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    cache_write_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
+    cache_write_tokens_details: Option<CodexCacheWriteDetails>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+struct CodexCacheWriteDetails {
+    #[serde(default, deserialize_with = "deserialize_optional_ttl_tokens")]
+    ttl_30m_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_ttl_tokens")]
+    ttl_12h_tokens: Option<u64>,
+}
+
+fn deserialize_optional_ttl_tokens<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?.as_u64())
+}
+
+impl CodexCacheWriteDetails {
+    fn validated(self, total: u64) -> Option<(u64, u64)> {
+        let short = self.ttl_30m_tokens?;
+        let long = self.ttl_12h_tokens?;
+        (short.checked_add(long)? == total).then_some((short, long))
+    }
 }
 
 impl<'de> Deserialize<'de> for CodexRawUsage {
@@ -331,17 +394,30 @@ impl<'de> Deserialize<'de> for CodexRawUsage {
             .cached_input_tokens
             .or(fields.cache_read_input_tokens)
             .or(fields.cached_tokens)
+            .or(fields
+                .input_tokens_details
+                .and_then(|details| details.cached_tokens))
             .unwrap_or(0)
             .min(input);
         let cache_creation = fields
             .cache_write_input_tokens
             .or(fields.cache_creation_input_tokens)
+            .or(fields
+                .input_tokens_details
+                .and_then(|details| details.cache_write_tokens))
             .unwrap_or(0)
             .min(input.saturating_sub(cached_input));
+        let (cache_creation_30m_tokens, cache_creation_12h_tokens) = fields
+            .input_tokens_details
+            .and_then(|details| details.cache_write_tokens_details)
+            .and_then(|details| details.validated(cache_creation))
+            .unwrap_or_default();
         Ok(Self {
             input_tokens: input,
             cached_input_tokens: cached_input,
             cache_creation_tokens: cache_creation,
+            cache_creation_30m_tokens,
+            cache_creation_12h_tokens,
             output_tokens: output,
             reasoning_output_tokens: reasoning,
             // Codex reports reasoning as a subset of output, so a derived total

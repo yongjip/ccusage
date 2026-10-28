@@ -36,6 +36,8 @@ struct CodexUsageKey {
     input_tokens: u64,
     cached_input_tokens: u64,
     cache_creation_tokens: u64,
+    cache_creation_30m_tokens: u64,
+    cache_creation_12h_tokens: u64,
     output_tokens: u64,
     reasoning_output_tokens: u64,
     total_tokens: u64,
@@ -470,6 +472,8 @@ fn accumulate_codex_event_into_model_usage(
     model_usage.input_tokens += event.input_tokens;
     model_usage.cached_input_tokens += event.cached_input_tokens;
     model_usage.cache_creation_tokens += event.cache_creation_tokens;
+    model_usage.cache_creation_30m_tokens += event.cache_creation_30m_tokens;
+    model_usage.cache_creation_12h_tokens += event.cache_creation_12h_tokens;
     model_usage.output_tokens += event.output_tokens;
     model_usage.reasoning_output_tokens += event.reasoning_output_tokens;
     model_usage.total_tokens += event.total_tokens;
@@ -483,6 +487,8 @@ fn accumulate_codex_event_into_model_usage(
         model_usage.long_context_input_tokens += event.input_tokens;
         model_usage.long_context_cached_input_tokens += event.cached_input_tokens;
         model_usage.long_context_cache_creation_tokens += event.cache_creation_tokens;
+        model_usage.long_context_cache_creation_30m_tokens += event.cache_creation_30m_tokens;
+        model_usage.long_context_cache_creation_12h_tokens += event.cache_creation_12h_tokens;
         model_usage.long_context_output_tokens += event.output_tokens;
     }
     if crate::has_time_dependent_pricing(model) {
@@ -531,11 +537,15 @@ fn accumulate_codex_event_into_usage_bucket(
     usage.input_tokens += event.input_tokens;
     usage.cached_input_tokens += event.cached_input_tokens;
     usage.cache_creation_tokens += event.cache_creation_tokens;
+    usage.cache_creation_30m_tokens += event.cache_creation_30m_tokens;
+    usage.cache_creation_12h_tokens += event.cache_creation_12h_tokens;
     usage.output_tokens += event.output_tokens;
     if is_long_context {
         usage.long_context_input_tokens += event.input_tokens;
         usage.long_context_cached_input_tokens += event.cached_input_tokens;
         usage.long_context_cache_creation_tokens += event.cache_creation_tokens;
+        usage.long_context_cache_creation_30m_tokens += event.cache_creation_30m_tokens;
+        usage.long_context_cache_creation_12h_tokens += event.cache_creation_12h_tokens;
         usage.long_context_output_tokens += event.output_tokens;
     }
 }
@@ -544,10 +554,14 @@ fn merge_codex_usage_bucket(target: &mut CodexUsageBucket, source: CodexUsageBuc
     target.input_tokens += source.input_tokens;
     target.cached_input_tokens += source.cached_input_tokens;
     target.cache_creation_tokens += source.cache_creation_tokens;
+    target.cache_creation_30m_tokens += source.cache_creation_30m_tokens;
+    target.cache_creation_12h_tokens += source.cache_creation_12h_tokens;
     target.output_tokens += source.output_tokens;
     target.long_context_input_tokens += source.long_context_input_tokens;
     target.long_context_cached_input_tokens += source.long_context_cached_input_tokens;
     target.long_context_cache_creation_tokens += source.long_context_cache_creation_tokens;
+    target.long_context_cache_creation_30m_tokens += source.long_context_cache_creation_30m_tokens;
+    target.long_context_cache_creation_12h_tokens += source.long_context_cache_creation_12h_tokens;
     target.long_context_output_tokens += source.long_context_output_tokens;
 }
 
@@ -648,6 +662,8 @@ fn apply_recorded_usage_entries<'a>(
             input_tokens: key.input_tokens,
             cached_input_tokens: key.cached_input_tokens,
             cache_creation_tokens: key.cache_creation_tokens,
+            cache_creation_30m_tokens: key.cache_creation_30m_tokens,
+            cache_creation_12h_tokens: key.cache_creation_12h_tokens,
             output_tokens: key.output_tokens,
             long_context_input_tokens: if is_long_context { key.input_tokens } else { 0 },
             long_context_cached_input_tokens: if is_long_context {
@@ -657,6 +673,16 @@ fn apply_recorded_usage_entries<'a>(
             },
             long_context_cache_creation_tokens: if is_long_context {
                 key.cache_creation_tokens
+            } else {
+                0
+            },
+            long_context_cache_creation_30m_tokens: if is_long_context {
+                key.cache_creation_30m_tokens
+            } else {
+                0
+            },
+            long_context_cache_creation_12h_tokens: if is_long_context {
+                key.cache_creation_12h_tokens
             } else {
                 0
             },
@@ -773,6 +799,8 @@ fn codex_event_key(
         input_tokens: event.input_tokens,
         cached_input_tokens: event.cached_input_tokens,
         cache_creation_tokens: event.cache_creation_tokens,
+        cache_creation_30m_tokens: event.cache_creation_30m_tokens,
+        cache_creation_12h_tokens: event.cache_creation_12h_tokens,
         output_tokens: event.output_tokens,
         reasoning_output_tokens: event.reasoning_output_tokens,
         total_tokens: event.total_tokens,
@@ -813,12 +841,16 @@ fn merge_codex_model_usage(target: &mut crate::CodexModelUsage, source: crate::C
     target.input_tokens += source.input_tokens;
     target.cached_input_tokens += source.cached_input_tokens;
     target.cache_creation_tokens += source.cache_creation_tokens;
+    target.cache_creation_30m_tokens += source.cache_creation_30m_tokens;
+    target.cache_creation_12h_tokens += source.cache_creation_12h_tokens;
     target.output_tokens += source.output_tokens;
     target.reasoning_output_tokens += source.reasoning_output_tokens;
     target.total_tokens += source.total_tokens;
     target.long_context_input_tokens += source.long_context_input_tokens;
     target.long_context_cached_input_tokens += source.long_context_cached_input_tokens;
     target.long_context_cache_creation_tokens += source.long_context_cache_creation_tokens;
+    target.long_context_cache_creation_30m_tokens += source.long_context_cache_creation_30m_tokens;
+    target.long_context_cache_creation_12h_tokens += source.long_context_cache_creation_12h_tokens;
     target.long_context_output_tokens += source.long_context_output_tokens;
     merge_codex_usage_bucket(
         &mut target.recorded_standard_usage,
@@ -938,6 +970,8 @@ mod tests {
     #[test]
     fn compaction_attribution_uses_file_order_when_workers_finish_in_reverse() {
         let first = CodexTokenUsageEvent {
+            cache_creation_30m_tokens: 0,
+            cache_creation_12h_tokens: 0,
             session_id: "first-session".into(),
             response_id: Some("response-1".into()),
             timestamp: "2026-09-01T00:00:01Z".into(),
@@ -1017,6 +1051,8 @@ mod tests {
     #[test]
     fn stores_timestamped_usage_only_for_time_dependent_models() {
         let event = |model: &str| CodexTokenUsageEvent {
+            cache_creation_30m_tokens: 0,
+            cache_creation_12h_tokens: 0,
             session_id: "session-1".to_string(),
             response_id: None,
             timestamp: "2026-08-17T01:00:00.000Z".to_string(),
@@ -1045,6 +1081,8 @@ mod tests {
     #[test]
     fn records_flex_usage_in_model_buckets() {
         let event = CodexTokenUsageEvent {
+            cache_creation_30m_tokens: 0,
+            cache_creation_12h_tokens: 0,
             session_id: "session-1".to_string(),
             timestamp: "2026-08-17T01:00:00.000Z".to_string(),
             model: Some("gpt-test".to_string()),

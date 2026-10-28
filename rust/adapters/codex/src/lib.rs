@@ -12,6 +12,8 @@ mod speed;
 mod types;
 
 #[cfg(test)]
+mod cache_ttl_tests;
+#[cfg(test)]
 mod compaction_tests;
 #[cfg(test)]
 mod compression_tests;
@@ -254,6 +256,8 @@ mod tests {
         let pricing = PricingMap::default();
         let report = report_json(
             &[CodexTokenUsageEvent {
+                cache_creation_30m_tokens: 0,
+                cache_creation_12h_tokens: 0,
                 session_id: "session-1".to_string(),
                 response_id: None,
                 timestamp: "2026-01-02T00:00:00.000Z".to_string(),
@@ -304,6 +308,8 @@ mod tests {
             }"#,
         );
         let event = |timestamp: &str| CodexTokenUsageEvent {
+            cache_creation_30m_tokens: 0,
+            cache_creation_12h_tokens: 0,
             session_id: "session-1".to_string(),
             response_id: None,
             timestamp: timestamp.to_string(),
@@ -443,6 +449,8 @@ mod tests {
         let report = report_json(
             &[
                 CodexTokenUsageEvent {
+                    cache_creation_30m_tokens: 0,
+                    cache_creation_12h_tokens: 0,
                     session_id: "session-1".to_string(),
                     response_id: None,
                     timestamp: "2026-01-02T00:00:00.000Z".to_string(),
@@ -457,6 +465,8 @@ mod tests {
                     service_tier: None,
                 },
                 CodexTokenUsageEvent {
+                    cache_creation_30m_tokens: 0,
+                    cache_creation_12h_tokens: 0,
                     session_id: "session-1".to_string(),
                     response_id: None,
                     timestamp: "2026-01-02T00:00:01.000Z".to_string(),
@@ -582,6 +592,10 @@ mod tests {
                 ..CodexUsageBucket::default()
             },
             recorded_fast_usage: CodexUsageBucket {
+                cache_creation_30m_tokens: 0,
+                cache_creation_12h_tokens: 0,
+                long_context_cache_creation_30m_tokens: 0,
+                long_context_cache_creation_12h_tokens: 0,
                 input_tokens: 300_000,
                 cached_input_tokens: 40_000,
                 cache_creation_tokens: 0,
@@ -1016,6 +1030,8 @@ mod tests {
         );
         let events = vec![
             CodexTokenUsageEvent {
+                cache_creation_30m_tokens: 0,
+                cache_creation_12h_tokens: 0,
                 session_id: "/workspace/api/session-a.jsonl".to_string(),
                 response_id: None,
                 timestamp: "2026-01-02T00:00:00.000Z".to_string(),
@@ -1030,6 +1046,8 @@ mod tests {
                 service_tier: None,
             },
             CodexTokenUsageEvent {
+                cache_creation_30m_tokens: 0,
+                cache_creation_12h_tokens: 0,
                 session_id: "/workspace/api/session-a.jsonl".to_string(),
                 response_id: None,
                 timestamp: "2026-01-02T00:05:00.000Z".to_string(),
@@ -1044,6 +1062,8 @@ mod tests {
                 service_tier: None,
             },
             CodexTokenUsageEvent {
+                cache_creation_30m_tokens: 0,
+                cache_creation_12h_tokens: 0,
                 session_id: "/workspace/web/session-b.jsonl".to_string(),
                 response_id: None,
                 timestamp: "2026-01-05T23:59:59.000Z".to_string(),
@@ -1058,6 +1078,8 @@ mod tests {
                 service_tier: None,
             },
             CodexTokenUsageEvent {
+                cache_creation_30m_tokens: 0,
+                cache_creation_12h_tokens: 0,
                 session_id: "ignored-missing-model".to_string(),
                 response_id: None,
                 timestamp: "2026-01-06T00:00:00.000Z".to_string(),

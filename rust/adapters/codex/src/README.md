@@ -58,9 +58,21 @@ Token mapping:
 
 - `input_tokens` - total input tokens.
 - `cached_input_tokens` - cached prompt tokens.
+- `cache_write_input_tokens` (or `cache_creation_input_tokens`) - cache writes, also a subset of total input.
 - `output_tokens` - completion tokens, including reasoning cost.
 - `reasoning_output_tokens` - informational breakdown; already included in output billing.
 - `total_tokens` - provided directly or recomputed as input plus output for legacy entries.
+
+Compatible headless records can also preserve the raw Responses API's `input_tokens_details`:
+`cached_tokens` and `cache_write_tokens` supply the same counters when the flat spellings are absent.
+When `cache_write_tokens_details.ttl_30m_tokens` and `ttl_12h_tokens` are both non-negative
+integers summing to the recorded write count, retain their split through aggregation, replay,
+deduplication, and speed/context buckets. Price those writes at 1.25× and 2.5× the applicable
+input rate. Their tokens remain included in the existing cache-creation total, not extra tokens.
+Unclassified writes keep the existing catalog/override rate, including when mixed with classified
+requests. A cumulative breakdown that first appears after unclassified writes cannot classify
+the next delta retroactively. Ordinary Codex rollouts do not currently expose lifetime buckets;
+missing metadata is never inferred from the aggregate write count or cache reads.
 
 Pricing uses model metadata from `turn_context`. Early sessions without metadata fall back to `gpt-5`, mark `isFallbackModel === true`, and expose fallback rows as approximate in aggregate JSON.
 

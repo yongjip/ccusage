@@ -10,6 +10,56 @@ const SESSION_FILE: &str = "rollout-2026-09-19T23-22-40-01a0bb8c-c7c0-7630-9d82-
 const OTHER_UUID: &str = "01a0cc9d-d8d1-8741-ae93-971c986041a1";
 
 #[test]
+fn prices_cache_write_lifetimes_in_focused_and_unified_reports() {
+    let fixture = fs_fixture!({
+        "codex/sessions/response.jsonl": json!({
+            "type": "response.completed", "timestamp": "2026-10-01T00:00:00Z",
+            "response": { "model": "gpt-5.6-terra", "usage": {
+                "input_tokens": 12_000, "output_tokens": 100, "total_tokens": 12_100,
+                "input_tokens_details": {
+                    "cached_tokens": 4_000, "cache_write_tokens": 7_000,
+                    "cache_write_tokens_details": { "ttl_30m_tokens": 3_000, "ttl_12h_tokens": 4_000 }
+                }
+            }}
+        }).to_string(),
+        "ccusage.json": json!({ "defaults": { "pricingOverrides": {
+            "gpt-5.6-terra": {
+                "inputCostPerToken": 0.000001,
+                "outputCostPerToken": 0.000002,
+                "cacheReadInputTokenCost": 0.0000001,
+                "cacheCreationInputTokenCost": 0.00000125
+            }
+        }}}).to_string(),
+    });
+    let config = fixture.path("ccusage.json");
+    for kind in ["daily", "monthly", "session"] {
+        let focused: Value = serde_json::from_str(&run_cli(
+            &fixture,
+            &[
+                "codex",
+                kind,
+                "--json",
+                "--config",
+                config.to_str().unwrap(),
+            ],
+        ))
+        .unwrap();
+        assert!((focused["totals"]["costUSD"].as_f64().unwrap() - 0.01535).abs() < 1e-12);
+        assert_eq!(focused["totals"]["inputTokens"], 1_000);
+        assert_eq!(focused["totals"]["cacheCreationTokens"], 7_000);
+        assert_eq!(focused["totals"]["totalTokens"], 12_100);
+    }
+    let unified: Value = serde_json::from_str(&run_cli(
+        &fixture,
+        &["daily", "--json", "--config", config.to_str().unwrap()],
+    ))
+    .unwrap();
+    assert!((unified["totals"]["totalCost"].as_f64().unwrap() - 0.01535).abs() < 1e-12);
+    assert_eq!(unified["totals"]["cacheCreationTokens"], 7_000);
+    assert_eq!(unified["totals"]["totalTokens"], 12_100);
+}
+
+#[test]
 fn selects_codex_session_by_supported_id_forms() {
     let fixture = codex_fixture();
 
